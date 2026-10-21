@@ -205,15 +205,21 @@ async function registerRead(code) {
 }
 
 // ---- Envío a Google Sheets ----
+// Nota sobre CORS: las Web App de Apps Script NO devuelven cabeceras CORS para
+// peticiones de otro origen (ej. GitHub Pages). Por eso usamos `mode: "no-cors"`:
+// el navegador envía la petición y Apps Script la guarda, pero la respuesta es
+// "opaca" (no se puede leer). Marcamos la lectura como enviada de forma optimista;
+// la regla de "una vez por día" del backend evita registros repetidos si se reintenta.
 async function sendToSheets(entry) {
   if (!GOOGLE_SHEETS_URL) {
     setSyncStatus("Sin URL de Google Sheets: guardado solo localmente.");
     return;
   }
   try {
-    const res = await fetch(GOOGLE_SHEETS_URL, {
+    await fetch(GOOGLE_SHEETS_URL, {
       method: "POST",
-      // text/plain evita el preflight CORS que Apps Script no maneja bien
+      mode: "no-cors",
+      // text/plain evita el preflight CORS (que Apps Script no responde)
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         n: entry.nombre,
@@ -223,20 +229,11 @@ async function sendToSheets(entry) {
         iso: entry.iso,
       }),
     });
-    const data = await res.json();
-    if (data.ok) {
-      entry.synced = true;
-      saveJSON(LS_LOGS, logs);
-      renderLogs();
-      setSyncStatus(`Sincronizado con Google Sheets: ${entry.nombre}`);
-    } else if (data.duplicado) {
-      entry.synced = true; // ya existe en la hoja; lo marcamos como sincronizado
-      saveJSON(LS_LOGS, logs);
-      renderLogs();
-      setSyncStatus(`La hoja ya tenía este QR: ${entry.nombre}`);
-    } else {
-      setSyncStatus("Error de Google Sheets: " + (data.error || "desconocido"));
-    }
+    // Con no-cors no podemos leer la respuesta: asumimos envío correcto.
+    entry.synced = true;
+    saveJSON(LS_LOGS, logs);
+    renderLogs();
+    setSyncStatus(`Enviado a Google Sheets: ${entry.nombre}`);
   } catch (err) {
     setSyncStatus("Sin conexión. Se reintentará con 'Sincronizar'. (" + err + ")");
   }
