@@ -204,39 +204,83 @@ async function registerRead(code) {
   sendToSheets(entry);
 }
 
-// ---- Envío a Google Sheets ----
-// Nota sobre CORS: las Web App de Apps Script NO devuelven cabeceras CORS para
-// peticiones de otro origen (ej. GitHub Pages). Por eso usamos `mode: "no-cors"`:
-// el navegador envía la petición y Apps Script la guarda, pero la respuesta es
-// "opaca" (no se puede leer). Marcamos la lectura como enviada de forma optimista;
-// la regla de "una vez por día" del backend evita registros repetidos si se reintenta.
-async function sendToSheets(entry) {
-  if (!GOOGLE_SHEETS_URL) {
-    setSyncStatus("Sin URL de Google Sheets: guardado solo localmente.");
-    return;
-  }
-  try {
-    await fetch(GOOGLE_SHEETS_URL, {
-      method: "POST",
-      mode: "no-cors",
-      // text/plain evita el preflight CORS (que Apps Script no responde)
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({
-        n: entry.nombre,
-        id: entry.id,
-        nc: entry.nonce,
-        sig: entry.sig,
-        iso: entry.iso,
-      }),
+// ---- Envío a Google Sheets (JSONP) ----
+// Las Web App de Apps Script NO devuelven cabeceras CORS, así que un fetch normal
+// no puede leer la respuesta desde otro origen (GitHub Pages). Usamos JSONP: pedimos
+// al backend por GET con un ?callback=..., y Apps Script responde un script que
+// ejecuta ese callback con el resultado. Así SÍ leemos la respuesta real (ok,
+// duplicado o error de firma) sin problemas de CORS.
+function sendToSheets(entry) {
+  return new Promise((resolve) => {
+    if (!GOOGLE_SHEETS_URL) {
+      setSyncStatus("Sin URL de Google Sheets: guardado solo localmente.");
+      resolve(false);
+      return;
+    }
+
+    const cbName = "qrcb_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
+    const params = new URLSearchParams({
+      n: entry.nombre,
+      id: String(entry.id),
+      nc: entry.nonce || "",
+      sig: entry.sig || "",
+      iso: entry.iso,
+      callback: cbName,
     });
-    // Con no-cors no podemos leer la respuesta: asumimos envío correcto.
-    entry.synced = true;
-    saveJSON(LS_LOGS, logs);
-    renderLogs();
-    setSyncStatus(`Enviado a Google Sheets: ${entry.nombre}`);
-  } catch (err) {
-    setSyncStatus("Sin conexión. Se reintentará con 'Sincronizar'. (" + err + ")");
-  }
+    const src = GOOGLE_SHEETS_URL + "?" + params.toString();
+
+    const script = document.createElement("script");
+    let done = false;
+
+    const cleanup = () => {
+      delete window[cbName];
+      if (script.parentNode) script.parentNode.removeChild(script);
+    };
+
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      cleanup();
+      setSyncStatus("Sin respuesta de Google Sheets. Revisa la URL /exec y el despliegue.");
+      resolve(false);
+    }, 15000);
+
+    window[cbName] = (data) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      cleanup();
+      if (data && data.ok) {
+        entry.synced = true;
+        saveJSON(LS_LOGS, logs);
+        renderLogs();
+        setSyncStatus(`Guardado en Google Sheets: ${entry.nombre} (${data.fecha} ${data.hora})`);
+        resolve(true);
+      } else if (data && data.duplicado) {
+        entry.synced = true;
+        saveJSON(LS_LOGS, logs);
+        renderLogs();
+        setSyncStatus(`Ya estaba registrado hoy: ${entry.nombre}`);
+        resolve(true);
+      } else {
+        const msg = data && data.error ? data.error : "respuesta inválida";
+        setSyncStatus("Google Sheets rechazó la lectura: " + msg);
+        resolve(false);
+      }
+    };
+
+    script.onerror = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      cleanup();
+      setSyncStatus("No se pudo contactar Google Sheets (error de red/URL).");
+      resolve(false);
+    };
+
+    script.src = src;
+    document.body.appendChild(script);
+  });
 }
 
 // Reintenta enviar todas las lecturas pendientes
