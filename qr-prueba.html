@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generador de QR seguro</title>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <style>
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      color: #0f172a;
+      border-radius: 16px;
+      padding: 28px 32px;
+      text-align: center;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+      max-width: 420px;
+    }
+    h1 { font-size: 1.3rem; margin: 0 0 12px; }
+    .owner { font-size: 1.5rem; font-weight: 700; margin: 8px 0; }
+    .code {
+      font-family: monospace;
+      background: #f1f5f9;
+      border-radius: 8px;
+      padding: 6px 10px;
+      display: inline-block;
+      margin-bottom: 16px;
+      color: #334155;
+    }
+    canvas { border-radius: 8px; }
+    .form { display: flex; gap: 8px; margin-bottom: 16px; }
+    .form input {
+      flex: 1;
+      padding: 9px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      font-size: 0.95rem;
+    }
+    button {
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 9px 16px;
+      font-size: 0.95rem;
+      cursor: pointer;
+    }
+    button:hover { background: #2563eb; }
+    .hint { color: #64748b; font-size: 0.8rem; margin-top: 16px; word-break: break-all; }
+    @media print {
+      body { background: #fff; }
+      .form, .hint, .actions { display: none; }
+      .card { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Generador de QR seguro</h1>
+
+    <div class="form">
+      <input id="in-nombre" type="text" value="Richard Siza" placeholder="Nombre" />
+      <input id="in-id" type="text" value="EMP-001" placeholder="ID" />
+      <button onclick="generar()">Generar</button>
+    </div>
+
+    <div class="owner" id="label-nombre">Richard Siza</div>
+    <div class="code" id="label-id">EMP-001</div>
+    <div><canvas id="qr"></canvas></div>
+
+    <div class="hint" id="payload"></div>
+
+    <div class="actions" style="margin-top:16px">
+      <button onclick="window.print()">Imprimir / Guardar PDF</button>
+    </div>
+  </div>
+
+  <script>
+    // DEBE coincidir con generar-qr.js, app.js y Code.gs
+    const CLAVE_SECRETA = "CAMBIA-ESTA-CLAVE-SECRETA-2024-xyz987";
+
+    async function hmacSha256Hex(message, secret) {
+      const enc = new TextEncoder();
+      const key = await crypto.subtle.importKey(
+        "raw", enc.encode(secret),
+        { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+      );
+      const buf = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+      return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    function randNonce() {
+      const a = new Uint8Array(12);
+      crypto.getRandomValues(a);
+      return [...a].map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    async function generar() {
+      const nombre = document.getElementById("in-nombre").value.trim() || "Sin nombre";
+      const id = document.getElementById("in-id").value.trim() || "EMP-000";
+      const nonce = randNonce();
+      const sig = (await hmacSha256Hex(id + "|" + nombre + "|" + nonce, CLAVE_SECRETA)).slice(0, 24);
+      const payload = JSON.stringify({ n: nombre, id: id, nc: nonce, sig: sig });
+
+      document.getElementById("label-nombre").textContent = nombre;
+      document.getElementById("label-id").textContent = id;
+      document.getElementById("payload").textContent = payload;
+
+      QRCode.toCanvas(
+        document.getElementById("qr"), payload,
+        { width: 280, margin: 2, errorCorrectionLevel: "Q" },
+        (err) => { if (err) console.error(err); }
+      );
+    }
+
+    generar();
+  </script>
+</body>
+</html>

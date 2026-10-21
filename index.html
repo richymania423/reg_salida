@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Registro de Lecturas QR</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Registro de Lecturas QR</h1>
+    <p class="subtitle">Escanea códigos QR y registra fecha, hora y dueño</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Google Sheets</h2>
+      <p class="hint">
+        Pega la URL de tu Web App de Google Apps Script (termina en <code>/exec</code>).
+        Las lecturas se guardarán automáticamente en tu hoja. Si la dejas vacía, la app
+        funciona solo con almacenamiento local.
+      </p>
+      <div class="owner-form">
+        <input id="sheets-url" type="text" placeholder="https://script.google.com/macros/s/.../exec" />
+        <button id="btn-save-url" class="btn btn-primary">Guardar URL</button>
+        <button id="btn-sync" class="btn btn-secondary">Sincronizar pendientes</button>
+      </div>
+      <div id="sync-status" class="hint"></div>
+    </section>
+
+    <section class="card">
+      <h2>Escáner</h2>
+      <div class="scanner-controls">
+        <button id="btn-start" class="btn btn-primary">Iniciar cámara</button>
+        <button id="btn-stop" class="btn btn-secondary" disabled>Detener</button>
+      </div>
+      <div id="reader"></div>
+      <div id="last-read" class="last-read hidden"></div>
+    </section>
+
+    <section class="card">
+      <h2>Directorio de dueños (opcional)</h2>
+      <p class="hint">
+        Solo para QR simples de texto plano. Los QR seguros ya llevan el nombre dentro,
+        así que no necesitas registrarlos aquí.
+      </p>
+      <div class="owner-form">
+        <input id="owner-code" type="text" placeholder="Contenido del QR" />
+        <input id="owner-name" type="text" placeholder="Nombre del dueño" />
+        <button id="btn-add-owner" class="btn btn-primary">Guardar</button>
+      </div>
+      <table class="table" id="owners-table">
+        <thead>
+          <tr><th>Código QR</th><th>Dueño</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>Lecturas registradas (<span id="count">0</span>)</h2>
+        <div class="actions">
+          <input id="search" type="text" placeholder="Buscar..." />
+          <button id="btn-export" class="btn btn-secondary">Exportar CSV</button>
+          <button id="btn-clear" class="btn btn-danger">Borrar todo</button>
+        </div>
+      </div>
+      <table class="table" id="log-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Fecha</th>
+            <th>Hora</th>
+            <th>Dueño</th>
+            <th>Contenido QR</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="empty-log" class="empty">Aún no hay lecturas registradas.</p>
+    </section>
+  </main>
+
+  <footer>
+    <p>Datos guardados localmente en este navegador (LocalStorage).</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
