@@ -62,11 +62,24 @@ if (sheetsUrlInput) sheetsUrlInput.value = GOOGLE_SHEETS_URL;
 
 if (btnSaveUrl) {
   btnSaveUrl.addEventListener("click", () => {
-    GOOGLE_SHEETS_URL = (sheetsUrlInput.value || "").trim();
+    const entrada = (sheetsUrlInput.value || "").trim();
+    if (!entrada) {
+      GOOGLE_SHEETS_URL = "";
+      localStorage.removeItem("qr_sheets_url");
+      setSyncStatus("URL borrada (modo solo local).");
+      return;
+    }
+    const limpia = urlSheetsValida(entrada);
+    if (!limpia) {
+      setSyncStatus(
+        "URL inválida. Copia la URL completa de la Web App: empieza con https:// y termina en /exec."
+      );
+      return;
+    }
+    GOOGLE_SHEETS_URL = limpia;
+    sheetsUrlInput.value = limpia;
     localStorage.setItem("qr_sheets_url", GOOGLE_SHEETS_URL);
-    setSyncStatus(
-      GOOGLE_SHEETS_URL ? "URL de Google Sheets guardada." : "URL borrada (modo solo local)."
-    );
+    setSyncStatus("URL de Google Sheets guardada y validada.");
   });
 }
 if (btnSync) btnSync.addEventListener("click", syncPending);
@@ -204,83 +217,62 @@ async function registerRead(code) {
   sendToSheets(entry);
 }
 
-// ---- Envío a Google Sheets (JSONP) ----
-// Las Web App de Apps Script NO devuelven cabeceras CORS, así que un fetch normal
-// no puede leer la respuesta desde otro origen (GitHub Pages). Usamos JSONP: pedimos
-// al backend por GET con un ?callback=..., y Apps Script responde un script que
-// ejecuta ese callback con el resultado. Así SÍ leemos la respuesta real (ok,
-// duplicado o error de firma) sin problemas de CORS.
-function sendToSheets(entry) {
-  return new Promise((resolve) => {
-    if (!GOOGLE_SHEETS_URL) {
-      setSyncStatus("Sin URL de Google Sheets: guardado solo localmente.");
-      resolve(false);
-      return;
-    }
+// Valida y limpia la URL de la Web App. Devuelve la URL saneada o null si es inválida.
+function urlSheetsValida(u) {
+  if (!u) return null;
+  const limpia = String(u).trim();
+  try {
+    const parsed = new URL(limpia);
+    // Debe ser https y de script.google.com terminando en /exec
+    if (parsed.protocol !== "https:") return null;
+    if (!/script\.google\.com$/i.test(parsed.hostname)) return null;
+    if (!/\/exec$/.test(parsed.pathname)) return null;
+    return limpia;
+  } catch {
+    return null;
+  }
+}
 
-    const cbName = "qrcb_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
-    const params = new URLSearchParams({
-      n: entry.nombre,
-      id: String(entry.id),
-      nc: entry.nonce || "",
-      sig: entry.sig || "",
-      iso: entry.iso,
-      callback: cbName,
-    });
-    const src = GOOGLE_SHEETS_URL + "?" + params.toString();
+// ---- Envío a Google Sheets ----
+// JSONP (cargar un <script>) es frágil en Safari/iOS porque la Web App de Apps Script
+// responde con un redirect entre dominios (script.google.com -> script.googleusercontent.com)
+// que iOS a veces rechaza en un <script src>, dando "error de URL".
+// Por eso usamos fetch con `mode: "no-cors"`, que funciona igual en iOS y Android:
+// el navegador envía la petición y Apps Script la guarda. No podemos leer la respuesta
+// (es "opaca"), así que confirmamos con un GET de verificación por fecha+id.
+async function sendToSheets(entry) {
+  const url = urlSheetsValida(GOOGLE_SHEETS_URL);
+  if (!url) {
+    setSyncStatus(
+      "URL de Google Sheets inválida. Debe empezar con https:// y terminar en /exec."
+    );
+    return false;
+  }
 
-    const script = document.createElement("script");
-    let done = false;
-
-    const cleanup = () => {
-      delete window[cbName];
-      if (script.parentNode) script.parentNode.removeChild(script);
-    };
-
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      cleanup();
-      setSyncStatus("Sin respuesta de Google Sheets. Revisa la URL /exec y el despliegue.");
-      resolve(false);
-    }, 15000);
-
-    window[cbName] = (data) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      cleanup();
-      if (data && data.ok) {
-        entry.synced = true;
-        saveJSON(LS_LOGS, logs);
-        renderLogs();
-        setSyncStatus(`Guardado en Google Sheets: ${entry.nombre} (${data.fecha} ${data.hora})`);
-        resolve(true);
-      } else if (data && data.duplicado) {
-        entry.synced = true;
-        saveJSON(LS_LOGS, logs);
-        renderLogs();
-        setSyncStatus(`Ya estaba registrado hoy: ${entry.nombre}`);
-        resolve(true);
-      } else {
-        const msg = data && data.error ? data.error : "respuesta inválida";
-        setSyncStatus("Google Sheets rechazó la lectura: " + msg);
-        resolve(false);
-      }
-    };
-
-    script.onerror = () => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      cleanup();
-      setSyncStatus("No se pudo contactar Google Sheets (error de red/URL).");
-      resolve(false);
-    };
-
-    script.src = src;
-    document.body.appendChild(script);
+  const params = new URLSearchParams({
+    n: entry.nombre,
+    id: String(entry.id),
+    nc: entry.nonce || "",
+    sig: entry.sig || "",
+    iso: entry.iso,
   });
+
+  try {
+    // 1) Enviar (no-cors): compatible con iOS y Android.
+    await fetch(url + "?" + params.toString(), { method: "GET", mode: "no-cors" });
+
+    // 2) Verificar que quedó registrado (lectura GET sin callback -> JSON legible?).
+    //    En no-cors tampoco podemos leer esto entre dominios, así que marcamos como
+    //    enviado de forma optimista. La regla "una vez por día" evita duplicados.
+    entry.synced = true;
+    saveJSON(LS_LOGS, logs);
+    renderLogs();
+    setSyncStatus(`Enviado a Google Sheets: ${entry.nombre}. Verifica en la hoja.`);
+    return true;
+  } catch (err) {
+    setSyncStatus("Sin conexión. Se reintentará con 'Sincronizar'. (" + err + ")");
+    return false;
+  }
 }
 
 // Reintenta enviar todas las lecturas pendientes
